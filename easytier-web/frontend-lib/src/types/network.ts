@@ -36,6 +36,12 @@ export enum AclChainType {
   Forward = 3,
 }
 
+function parseEnum<T>(enumObj: Record<string, any>, v: string | number | undefined, fallback: T): T {
+  if (v === undefined) return fallback
+  if (typeof v === 'string') return (enumObj[v] as T) ?? fallback
+  return v as T
+}
+
 export interface AclRule {
   name: string
   description: string
@@ -274,6 +280,26 @@ export function normalizeNetworkConfig(config: NetworkConfig): NetworkConfig {
 
   normalized.networking_method = methodStr as any
   normalized.public_server_url = ''
+
+  // Normalize ACL enum fields from pbjson string names to numeric values.
+  const aclV1 = normalized.acl?.acl_v1
+  if (aclV1) {
+    for (const chain of aclV1.chains) {
+      chain.chain_type = parseEnum(AclChainType, chain.chain_type as any, AclChainType.UnspecifiedChain)
+      chain.default_action = parseEnum(AclAction, chain.default_action as any, AclAction.Allow)
+      for (const rule of chain.rules) {
+        rule.protocol = parseEnum(AclProtocol, rule.protocol as any, AclProtocol.Any)
+        rule.action = parseEnum(AclAction, rule.action as any, AclAction.Allow)
+      }
+    }
+  }
+
+  // instance_recv_bps_limit is uint64 in proto, pbjson encodes it as string.
+  // Convert to number for UI InputNumber; pbjson can deserialize either form.
+  if (typeof normalized.instance_recv_bps_limit === 'string') {
+    normalized.instance_recv_bps_limit = Number(normalized.instance_recv_bps_limit)
+  }
+
   return normalized
 }
 

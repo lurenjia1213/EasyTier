@@ -251,19 +251,28 @@ export function normalizeNetworkConfig(config: NetworkConfig): NetworkConfig {
 
   const publicServerUrl = normalized.public_server_url?.trim() ?? ''
 
-  switch (normalized.networking_method) {
-    case NetworkingMethod.PublicServer:
+  // pbjson encodes enum fields as string names (proto3 JSON mapping).
+  // The old prost_wkt_build serde and the client-side enum constants both
+  // use integers. Convert to the string name so pbjson can deserialise it.
+  const rawMethod: any = normalized.networking_method
+  const methodStr: string =
+    typeof rawMethod === 'number' ? NetworkingMethod[rawMethod] ?? 'Manual'
+    : typeof rawMethod === 'string' ? rawMethod
+    : 'Manual'
+
+  switch (methodStr) {
+    case 'PublicServer':
       normalized.peer_urls = publicServerUrl ? [publicServerUrl] : []
       break
-    case NetworkingMethod.Manual:
+    case 'Manual':
       break
-    case NetworkingMethod.Standalone:
+    case 'Standalone':
     default:
       normalized.peer_urls = []
       break
   }
 
-  normalized.networking_method = NetworkingMethod.Manual
+  normalized.networking_method = methodStr as any
   normalized.public_server_url = ''
   return normalized
 }
@@ -341,9 +350,9 @@ export interface NodeInfo {
 }
 
 export interface StunInfo {
-  udp_nat_type: number
-  tcp_nat_type: number
-  last_update_time: number
+  udp_nat_type: string | number
+  tcp_nat_type: string | number
+  last_update_time: string | number
 }
 
 export interface Route {
@@ -390,11 +399,11 @@ export interface TunnelInfo {
 }
 
 export interface PeerConnStats {
-  rx_bytes: number
-  tx_bytes: number
-  rx_packets: number
-  tx_packets: number
-  latency_us: number
+  rx_bytes: string | number
+  tx_bytes: string | number
+  rx_packets: string | number
+  tx_packets: string | number
+  latency_us: string | number
 }
 
 export interface PortForwardConfig {

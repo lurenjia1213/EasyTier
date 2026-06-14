@@ -44,13 +44,21 @@ function resolveObjPath(path: string, obj = globalThis, separator = '.') {
   return properties.reduce((prev, curr) => prev?.[curr], obj)
 }
 
+function toNumber(v: any): number {
+  if (typeof v === 'string')
+    return Number(v)
+  if (typeof v === 'number')
+    return v
+  return 0
+}
+
 function statsCommon(info: any, field: string): number | undefined {
   if (!info.peer)
     return undefined
 
   const conns = info.peer.conns
   return conns.reduce((acc: number, conn: any) => {
-    return acc + resolveObjPath(field, conn)
+    return acc + toNumber(resolveObjPath(field, conn))
   }, 0)
 }
 
@@ -248,7 +256,7 @@ const myNodeInfoChips = computed(() => {
     } as Chip)
   }
 
-  const udpNatType: NatType = my_node_info.stun_info?.udp_nat_type
+  const udpNatType = parseNatType(my_node_info.stun_info?.udp_nat_type)
   if (udpNatType !== undefined) {
     chips.push({
       label: `UDP NAT Type: ${udpNatTypeStrMap[udpNatType]}`,
@@ -280,10 +288,18 @@ function rxGlobalSum() {
   return globalSumCommon('stats.rx_bytes')
 }
 
+function parseNatType(v: string | number | undefined): NatType | undefined {
+  if (v === undefined)
+    return undefined
+  if (typeof v === 'string')
+    return NatType[v as keyof typeof NatType]
+  return v as NatType
+}
+
 function natType(info: PeerRoutePair): string {
-  const udpNatType = info.route?.stun_info?.udp_nat_type;
+  const udpNatType = parseNatType(info.route?.stun_info?.udp_nat_type);
   if (udpNatType !== undefined)
-    return udpNatTypeStrMap[udpNatType as NatType]
+    return udpNatTypeStrMap[udpNatType]
 
   return ''
 }

@@ -3,13 +3,12 @@ import { AutoComplete, Button, Checkbox, Dialog, Divider, InputNumber, InputText
 import InputGroup from 'primevue/inputgroup'
 import InputGroupAddon from 'primevue/inputgroupaddon'
 import {
-  addRow,
   DEFAULT_NETWORK_CONFIG,
   NetworkConfig,
+  PortForwardConfig,
   normalizeNetworkConfig,
-  removeRow
 } from '../types/network'
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AclManager from './acl/AclManager.vue'
 import UrlListInput from './UrlListInput.vue'
@@ -110,25 +109,54 @@ const portForwardProtocolOptions = ref(["tcp", "udp"]);
 
 const editingPortForward = ref(false);
 const editingPortForwardIndex = ref(-1);
-const editingPortForwardData = ref();
+const editingPortForwardData = ref<PortForwardConfig | null>(null);
+
+function createPortForward(): PortForwardConfig {
+  return { proto: 'tcp', bind_ip: '', bind_port: 65535, dst_ip: '', dst_port: 65535 }
+}
+
+function ensurePortForwards() {
+  curNetwork.value.port_forwards ??= []
+  return curNetwork.value.port_forwards
+}
 
 function openPortForwardEditor(index: number) {
+  const portForwards = ensurePortForwards()
+  const portForward = portForwards[index]
+  if (!portForward) {
+    return
+  }
   editingPortForwardIndex.value = index;
   // deep copy
-  editingPortForwardData.value = JSON.parse(JSON.stringify(curNetwork.value.port_forwards[index]));
+  editingPortForwardData.value = JSON.parse(JSON.stringify(portForward));
   editingPortForward.value = true;
 }
 
 function addPortForward() {
-  addRow(curNetwork.value.port_forwards)
+  const portForwards = ensurePortForwards()
+  portForwards.push(createPortForward())
   if (isCompact.value) {
-    openPortForwardEditor(curNetwork.value.port_forwards.length - 1)
+    openPortForwardEditor(portForwards.length - 1)
   }
 }
 
+function removePortForward(index: number) {
+  ensurePortForwards().splice(index, 1)
+}
+
 function savePortForward() {
-  curNetwork.value.port_forwards[editingPortForwardIndex.value] = editingPortForwardData.value;
+  if (!editingPortForwardData.value || editingPortForwardIndex.value < 0) {
+    closePortForwardEditor()
+    return
+  }
+  ensurePortForwards()[editingPortForwardIndex.value] = editingPortForwardData.value;
+  closePortForwardEditor()
+}
+
+function closePortForwardEditor() {
   editingPortForward.value = false;
+  editingPortForwardData.value = null;
+  editingPortForwardIndex.value = -1;
 }
 
 const portForwardContainer = ref<HTMLElement | null>(null);
@@ -161,6 +189,22 @@ function syncNormalizedNetwork(network: NetworkConfig | undefined): void {
 }
 
 watch(() => curNetwork.value, syncNormalizedNetwork, { immediate: true, deep: false })
+
+// v-model can't use expressions like (x || []), so create computed wrappers
+function makeArrayModel(key: 'peer_urls' | 'listener_urls' | 'relay_network_whitelist' | 'mapped_listeners') {
+  return computed({
+    get: () => curNetwork.value[key] ?? [],
+    set: (v: string[]) => { curNetwork.value[key] = v }
+  })
+}
+const peerUrls = makeArrayModel('peer_urls')
+const listenerUrls = makeArrayModel('listener_urls')
+const relayNetworkWhitelist = makeArrayModel('relay_network_whitelist')
+const mappedListeners = makeArrayModel('mapped_listeners')
+const instanceRecvBpsLimit = computed({
+  get: () => curNetwork.value.instance_recv_bps_limit as number | undefined,
+  set: (v: number | null | undefined) => { curNetwork.value.instance_recv_bps_limit = v ?? undefined }
+})
 </script>
 
 <template>
@@ -212,7 +256,7 @@ watch(() => curNetwork.value, syncNormalizedNetwork, { immediate: true, deep: fa
                     <span class="pi pi-question-circle ml-2 self-center" v-tooltip="t('initial_nodes_help')"></span>
                   </div>
                   <div class="items-center flex flex-col p-fluid gap-y-2">
-                    <UrlListInput id="initial_nodes" v-model="curNetwork.peer_urls" :protos="protos"
+                    <UrlListInput id="initial_nodes" v-model="peerUrls" :protos="protos"
                       defaultUrl="tcp://:11010" :add-label="t('add_initial_node')"
                       :placeholder="t('initial_node_placeholder')" />
                   </div>
@@ -286,7 +330,7 @@ watch(() => curNetwork.value, syncNormalizedNetwork, { immediate: true, deep: fa
               <div class="flex flex-row gap-x-9 flex-wrap">
                 <div class="flex flex-col gap-2 grow p-fluid">
                   <label for="listener_urls">{{ t('listener_urls') }}</label>
-                  <UrlListInput v-model="curNetwork.listener_urls" :protos="protos" :add-label="t('add_listener_url')"
+                  <UrlListInput v-model="listenerUrls" :protos="protos" :add-label="t('add_listener_url')"
                     placeholder="0.0.0.0" />
                 </div>
               </div>
@@ -317,7 +361,7 @@ watch(() => curNetwork.value, syncNormalizedNetwork, { immediate: true, deep: fa
                     <span class="pi pi-question-circle ml-2 self-center"
                       v-tooltip="t('instance_recv_bps_limit_help')"></span>
                   </div>
-                  <InputNumber id="instance_recv_bps_limit" v-model="curNetwork.instance_recv_bps_limit"
+                  <InputNumber id="instance_recv_bps_limit" v-model="instanceRecvBpsLimit"
                     aria-describedby="instance_recv_bps_limit-help" :format="false"
                     :placeholder="t('instance_recv_bps_limit_placeholder')" :min="1" fluid />
                 </div>
@@ -334,7 +378,7 @@ watch(() => curNetwork.value, syncNormalizedNetwork, { immediate: true, deep: fa
                     off-icon="pi pi-times" :on-label="t('off_text')" :off-label="t('on_text')" class="w-48" />
                   <div v-if="curNetwork.enable_relay_network_whitelist" class="items-center flex flex-row gap-x-4">
                     <div class="min-w-64 w-full">
-                      <AutoComplete id="relay_network_whitelist" v-model="curNetwork.relay_network_whitelist"
+                      <AutoComplete id="relay_network_whitelist" v-model="relayNetworkWhitelist"
                         :placeholder="t('relay_network_whitelist')" class="w-full" multiple fluid
                         :suggestions="whitelistSuggestions" @complete="searchWhitelistSuggestions" />
                     </div>
@@ -395,7 +439,7 @@ watch(() => curNetwork.value, syncNormalizedNetwork, { immediate: true, deep: fa
                     <label for="mapped_listeners">{{ t('mapped_listeners') }}</label>
                     <span class="pi pi-question-circle ml-2 self-center" v-tooltip="t('mapped_listeners_help')"></span>
                   </div>
-                  <UrlListInput v-model="curNetwork.mapped_listeners" :protos="protos"
+                  <UrlListInput v-model="mappedListeners" :protos="protos"
                     :add-label="t('add_mapped_listener')" />
                 </div>
               </div>
@@ -437,8 +481,8 @@ watch(() => curNetwork.value, syncNormalizedNetwork, { immediate: true, deep: fa
                         </InputGroup>
                       </div>
                       <div style="flex-grow: 1;">
-                        <Button v-if="curNetwork.port_forwards.length > 0" icon="pi pi-trash" severity="danger" text
-                          rounded @click="removeRow(index, curNetwork.port_forwards)" />
+                        <Button v-if="(curNetwork.port_forwards || []).length > 0" icon="pi pi-trash" severity="danger" text
+                          rounded @click="removePortForward(index)" />
                       </div>
                     </div>
                     <!-- Small screen view -->
@@ -448,7 +492,7 @@ watch(() => curNetwork.value, syncNormalizedNetwork, { immediate: true, deep: fa
                       <div class="flex gap-2">
                         <Button icon="pi pi-pencil" class="p-button-sm" @click="openPortForwardEditor(index)" />
                         <Button icon="pi pi-trash" class="p-button-sm p-button-danger"
-                          @click="removeRow(index, curNetwork.port_forwards)" />
+                          @click="removePortForward(index)" />
                       </div>
                     </div>
                   </div>
@@ -482,7 +526,7 @@ watch(() => curNetwork.value, syncNormalizedNetwork, { immediate: true, deep: fa
                       </InputGroup>
                     </div>
                     <template #footer>
-                      <Button :label="t('web.common.cancel')" icon="pi pi-times" @click="editingPortForward = false"
+                      <Button :label="t('web.common.cancel')" icon="pi pi-times" @click="closePortForwardEditor"
                         text />
                       <Button :label="t('web.common.save')" icon="pi pi-save" @click="savePortForward" />
                     </template>

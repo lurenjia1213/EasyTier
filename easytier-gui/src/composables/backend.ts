@@ -1,11 +1,11 @@
 import { invoke } from '@tauri-apps/api/core'
 import { Api, NetworkTypes } from 'easytier-frontend-lib'
-import { GetNetworkMetasResponse } from 'node_modules/easytier-frontend-lib/dist/modules/api'
 import { type ConfigSource, normalizeConfigSource } from './config_source'
 
 type NetworkConfig = NetworkTypes.NetworkConfig
 type ValidateConfigResponse = Api.ValidateConfigResponse
 type ListNetworkInstanceIdResponse = Api.ListNetworkInstanceIdResponse
+type GetNetworkMetasResponse = Api.GetNetworkMetasResponse
 interface ServiceOptions {
   config_dir: string
   rpc_portal: string
@@ -63,7 +63,18 @@ export async function runNetworkInstance(cfg: NetworkConfig, save: boolean) {
 }
 
 export async function collectNetworkInfo(instanceId: string) {
-  return await invoke<Api.CollectNetworkInfoResponse>('collect_network_info', { instanceId })
+  const response = await invoke<Api.CollectNetworkInfoResponse>('collect_network_info', { instanceId })
+  const parsedMap = Object.fromEntries(Object.entries(response.info?.map ?? {}).map(([key, value]) => [
+    key,
+    value ? NetworkTypes.pbjsonParseNetworkInstanceRunningInfo(value) : undefined,
+  ]))
+  return {
+    ...response,
+    info: {
+      ...response.info,
+      map: parsedMap,
+    },
+  }
 }
 
 export async function setLoggingLevel(level: string) {

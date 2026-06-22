@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { useTimeAgo } from '@vueuse/core'
 import { IPv4 } from 'ip-num/IPNumber'
-import { NetworkInstance, type TunnelInfo, type NodeInfo, type PeerRoutePair } from '../types/network'
+import { NetworkInstance, NatType, type TunnelInfo, type NodeInfo, type PeerRoutePair } from '../types/network'
 import { useI18n } from 'vue-i18n';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { ipv4InetToString, ipv4ToString, ipv6ToString } from '../modules/utils';
@@ -39,18 +38,25 @@ function routeCost(info: any) {
   return '?'
 }
 
-function resolveObjPath(path: string, obj = globalThis, separator = '.') {
+function resolveObjPath(path: string, obj: any, separator = '.') {
   const properties = Array.isArray(path) ? path : path.split(separator)
   return properties.reduce((prev, curr) => prev?.[curr], obj)
+}
+
+// Backend pbjson can carry uint64 stats such as latency_us/tx_bytes as strings.
+// Convert before summing, otherwise JS '+' concatenates strings and inflates values.
+function numericStat(value: unknown): number {
+  const numericValue = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : 0
+  return Number.isFinite(numericValue) ? numericValue : 0
 }
 
 function statsCommon(info: any, field: string): number | undefined {
   if (!info.peer)
     return undefined
 
-  const conns = info.peer.conns
+  const conns = info.peer.conns ?? []
   return conns.reduce((acc: number, conn: any) => {
-    return acc + resolveObjPath(field, conn)
+    return acc + numericStat(resolveObjPath(field, conn))
   }, 0)
 }
 
@@ -78,7 +84,10 @@ function latencyMs(info: PeerRoutePair) {
   let lat_us_sum = statsCommon(info, 'stats.latency_us')
   if (lat_us_sum === undefined)
     return ''
-  lat_us_sum = lat_us_sum / 1000 / info.peer!.conns.length
+  const connCount = info.peer?.conns?.length ?? 0
+  if (connCount === 0)
+    return ''
+  lat_us_sum = lat_us_sum / 1000 / connCount
   return `${lat_us_sum % 1 > 0 ? Math.round(lat_us_sum) + 1 : Math.round(lat_us_sum)}ms`
 }
 
@@ -98,14 +107,19 @@ function lossRate(info: PeerRoutePair) {
 }
 
 function version(info: PeerRoutePair) {
-  return info.route.version === '' ? 'unknown' : info.route.version
+  const routeVersion = info.route?.version
+  return routeVersion ? routeVersion : 'unknown'
 }
 
 function ipFormat(info: PeerRoutePair) {
-  const ip = info.route.ipv4_addr
+  const ip = info.route?.ipv4_addr
   if (typeof ip === 'string')
     return ip
-  return ip ? `${IPv4.fromNumber(ip.address.addr)}/${ip.network_length}` : ''
+  const addr = ip?.address?.addr
+  const networkLength = ip?.network_length
+  return typeof addr === 'number' && typeof networkLength === 'number'
+    ? `${IPv4.fromNumber(addr)}/${networkLength}`
+    : ''
 }
 
 function oneTunnelProto(tunnel?: TunnelInfo): string {
@@ -125,20 +139,20 @@ function oneTunnelProto(tunnel?: TunnelInfo): string {
     }
   }
   if (isIPv6)
-    return `${tunnel.tunnel_type}6`
+    return `${tunnel.tunnel_type ?? ''}6`
   else
-    return tunnel.tunnel_type
+    return tunnel.tunnel_type ?? ''
 }
 
 function tunnelProto(info: PeerRoutePair) {
-  return [...new Set(info.peer?.conns.map(c => oneTunnelProto(c.tunnel)))].join(',')
+  return [...new Set(info.peer?.conns?.map(c => oneTunnelProto(c.tunnel)))].join(',')
 }
 
 const myNodeInfo = computed(() => {
   if (!props.curNetworkInst)
-    return {} as NodeInfo
+    return undefined
 
-  return props.curNetworkInst.detail?.my_node_info
+  return props.curNetworkInst.detail?.my_node_info as NodeInfo | undefined
 })
 
 interface Chip {
@@ -146,22 +160,7 @@ interface Chip {
   icon: string
 }
 
-// udp nat type
-enum NatType {
-  // has NAT; but own a single public IP, port is not changed
-  Unknown = 0,
-  OpenInternet = 1,
-  NoPAT = 2,
-  FullCone = 3,
-  Restricted = 4,
-  PortRestricted = 5,
-  Symmetric = 6,
-  SymUdpFirewall = 7,
-  SymmetricEasyInc = 8,
-  SymmetricEasyDec = 9,
-};
-
-const udpNatTypeStrMap = {
+const udpNatTypeStrMap: Record<number, string> = {
   [NatType.Unknown]: 'Unknown',
   [NatType.OpenInternet]: 'Open Internet',
   [NatType.NoPAT]: 'No PAT',
@@ -206,7 +205,7 @@ const myNodeInfoChips = computed(() => {
 
   // local ipv4s
   const local_ipv4s = my_node_info.ips?.interface_ipv4s
-  for (const [idx, ip] of local_ipv4s?.entries()) {
+  for (const [idx, ip] of local_ipv4s?.entries() ?? []) {
     chips.push({
       label: `Local IPv4 ${idx}: ${ipv4ToString(ip)}`,
       icon: '',
@@ -215,7 +214,7 @@ const myNodeInfoChips = computed(() => {
 
   // local ipv6s
   const local_ipv6s = my_node_info.ips?.interface_ipv6s
-  for (const [idx, ip] of local_ipv6s?.entries()) {
+  for (const [idx, ip] of local_ipv6s?.entries() ?? []) {
     chips.push({
       label: `Local IPv6 ${idx}: ${ipv6ToString(ip)}`,
       icon: '',
@@ -226,7 +225,7 @@ const myNodeInfoChips = computed(() => {
   const public_ip = my_node_info.ips?.public_ipv4
   if (public_ip) {
     chips.push({
-      label: `Public IP: ${IPv4.fromNumber(public_ip.addr)}`,
+      label: `Public IP: ${ipv4ToString(public_ip)}`,
       icon: '',
     } as Chip)
   }
@@ -241,14 +240,14 @@ const myNodeInfoChips = computed(() => {
 
   // listeners:
   const listeners = my_node_info.listeners
-  for (const [idx, listener] of listeners?.entries()) {
+  for (const [idx, listener] of listeners?.entries() ?? []) {
     chips.push({
       label: `Listener ${idx}: ${listener.url}`,
       icon: '',
     } as Chip)
   }
 
-  const udpNatType: NatType = my_node_info.stun_info?.udp_nat_type
+  const udpNatType = my_node_info.stun_info?.udp_nat_type
   if (udpNatType !== undefined) {
     chips.push({
       label: `UDP NAT Type: ${udpNatTypeStrMap[udpNatType]}`,
@@ -307,13 +306,15 @@ const rxRate = ref('0')
 const showNodeDetails = ref(false)
 
 onMounted(() => {
+  prevTxSum = txGlobalSum()
+  prevRxSum = rxGlobalSum()
   rateIntervalId = window.setInterval(() => {
     const curTxSum = txGlobalSum()
-    txRate.value = humanFileSize((curTxSum - prevTxSum) / (rateInterval / 1000))
+    txRate.value = humanFileSize(Math.max(0, curTxSum - prevTxSum) / (rateInterval / 1000))
     prevTxSum = curTxSum
 
     const curRxSum = rxGlobalSum()
-    rxRate.value = humanFileSize((curRxSum - prevRxSum) / (rateInterval / 1000))
+    rxRate.value = humanFileSize(Math.max(0, curRxSum - prevRxSum) / (rateInterval / 1000))
     prevRxSum = curRxSum
   }, rateInterval)
 })
@@ -328,7 +329,7 @@ const dialogHeader = ref('event_log')
 
 function showVpnPortalConfig() {
   const my_node_info = myNodeInfo.value
-  if (!my_node_info)
+  if (!my_node_info?.vpn_portal_cfg)
     return
 
   const url = 'https://www.wireguardconfig.com/qrcode'
@@ -342,9 +343,34 @@ function showEventLogs() {
   if (!detail)
     return
 
-  dialogContent.value = detail.events.map((event: string) => JSON.parse(event))
+  dialogContent.value = detail.events?.map(parseEventLog) ?? []
   dialogHeader.value = 'event_log'
   dialogVisible.value = true
+}
+
+function parseEventLog(event: string) {
+  try {
+    const parsed = JSON.parse(event)
+    const parsedEvent = parsed?.event
+    return {
+      time: parsed?.time,
+      event: parsedEvent && typeof parsedEvent === 'object' ? parsedEvent : { Unknown: parsedEvent ?? parsed },
+    }
+  } catch {
+    return {
+      time: undefined,
+      event: { Unknown: event },
+    }
+  }
+}
+
+function eventTimeLabel(time: unknown): string {
+  if (typeof time !== 'string') {
+    return ''
+  }
+
+  const timestamp = Date.parse(time)
+  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : ''
 }
 </script>
 
@@ -357,8 +383,7 @@ function showEventLogs() {
       </ScrollPanel>
       <Timeline v-else :value="dialogContent">
         <template #opposite="slotProps">
-          <small class="text-surface-500 dark:text-surface-400">{{ useTimeAgo(Date.parse(slotProps.item.time))
-          }}</small>
+          <small class="text-surface-500 dark:text-surface-400">{{ eventTimeLabel(slotProps.item.time) }}</small>
         </template>
         <template #content="slotProps">
           <HumanEvent :event="slotProps.item.event" />

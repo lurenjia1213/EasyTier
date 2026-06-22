@@ -212,33 +212,40 @@ const saveAndRunNewNetwork = async (config?: NetworkTypes.NetworkConfig) => {
         return;
     }
 
-    const targetInstanceId = instanceId.value ?? cfg.instance_id;
-    if (targetInstanceId && cfg.instance_id !== targetInstanceId) {
+    const targetInstanceId = instanceId.value ?? cfg.instance_id!;
+    if (targetInstanceId && cfg.instance_id! !== targetInstanceId) {
         cfg.instance_id = targetInstanceId;
     }
 
+    const wasDisabled = networkIsDisabled.value;
+
     try {
-        if (networkIsDisabled.value) {
+        if (wasDisabled) {
             await props.api.save_config(cfg);
-            await props.api.update_network_instance_state(cfg.instance_id, false);
+            await props.api.update_network_instance_state(cfg.instance_id!, false);
         } else {
             await props.api.run_network(cfg, currentNetworkControl.remoteSave.value);
         }
-
-        delete networkMetaCache.value[cfg.instance_id];
-        await loadNetworkMetas([cfg.instance_id]);
-
-        selectedInstanceId.value = { uuid: cfg.instance_id };
-        await loadNetworkInstanceIds();
-        await loadCurrentNetworkInfo();
     } catch (e: any) {
         console.error(e);
         toast.add({ severity: 'error', summary: 'Error', detail: 'Failed to run network, error: ' + JSON.stringify(e.response?.data ?? e), life: 2000 });
         return;
     }
 
+    delete networkMetaCache.value[cfg.instance_id!];
+    selectedInstanceId.value = { uuid: cfg.instance_id! };
     emits('update');
     isEditingNetwork.value = false;
+
+    // Starting a TUN-backed instance can succeed before running-info is ready.
+    // Keep the start result successful and let the periodic refresh pick up status.
+    try {
+        await loadNetworkMetas([cfg.instance_id!]);
+        await loadNetworkInstanceIds();
+        await loadCurrentNetworkInfo();
+    } catch (e) {
+        console.debug('Network started, but failed to refresh status immediately', e);
+    }
 }
 
 const saveNetworkConfig = async () => {
@@ -247,8 +254,8 @@ const saveNetworkConfig = async () => {
     }
     await props.api.save_config(currentNetworkConfig.value);
 
-    delete networkMetaCache.value[currentNetworkConfig.value.instance_id];
-    await loadNetworkMetas([currentNetworkConfig.value.instance_id]);
+    delete networkMetaCache.value[currentNetworkConfig.value.instance_id!];
+    await loadNetworkMetas([currentNetworkConfig.value.instance_id!]);
 
     toast.add({ severity: 'success', summary: t("web.common.success"), detail: t("web.device_management.config_saved"), life: 2000 });
 }
@@ -345,7 +352,7 @@ const handleFileUpload = (event: Event) => {
             const config = resp.config;
             if (!config) return;
 
-            config.instance_id = currentNetworkConfig.value?.instance_id ?? config?.instance_id;
+            config.instance_id = currentNetworkConfig.value?.instance_id ?? config.instance_id;
             currentNetworkConfig.value = config;
             toast.add({ severity: 'success', summary: 'Import Success', detail: "Config file import success", life: 2000 });
         } catch (error) {
@@ -386,7 +393,7 @@ const syncTomlConfig = async (tomlConfig: string): Promise<void> => {
     if (!config) {
         throw new Error("Parsed config is empty");
     }
-    config.instance_id = currentNetworkConfig.value?.instance_id ?? config?.instance_id;
+    config.instance_id = currentNetworkConfig.value?.instance_id ?? config.instance_id;
     currentNetworkConfig.value = config;
 }
 
@@ -492,7 +499,7 @@ onUnmounted(() => {
                                     <div class="flex items-center min-w-0">
                                         <div class="mr-4 min-w-0 flex-1">
                                             <span class="truncate block">{{ t('network_name') }}: {{
-                                                slotProps.option.meta.network_name }}</span>
+                                                slotProps.option.meta?.network_name ?? slotProps.option.uuid }}</span>
                                         </div>
                                         <Tag class="my-auto leading-3 shrink-0"
                                             :severity="isRunning(slotProps.option.uuid) ? 'success' : 'info'"

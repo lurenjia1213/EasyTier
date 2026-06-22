@@ -2,7 +2,7 @@
 import { Button, Column, DataTable, Divider, InputText, Select, SelectButton, ToggleButton } from 'primevue'
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { AclAction, AclChain, AclChainType, AclProtocol, AclRule } from '../../types/network'
+import { AclAction, AclChain, AclChainType, AclProtocol, AclRule, ensureAclRuleLists } from '../../types/network'
 import AclRuleDialog from './AclRuleDialog.vue'
 
 const props = defineProps<{
@@ -13,11 +13,16 @@ const chain = defineModel<AclChain>({ required: true })
 
 const { t } = useI18n()
 
+function ensureRules() {
+  chain.value.rules ??= []
+  return chain.value.rules
+}
+
 watch(() => chain.value.rules, (newRules) => {
   if (!newRules) return
   const isSorted = newRules.every((rule, i) => i === 0 || (rule.priority || 0) <= (newRules[i - 1].priority || 0))
   if (!isSorted) {
-    chain.value.rules.sort((a, b) => (b.priority || 0) - (a.priority || 0))
+    ensureRules().sort((a, b) => (b.priority || 0) - (a.priority || 0))
   }
 }, { deep: true, immediate: true })
 
@@ -56,11 +61,12 @@ function getActionLabel(action: AclAction) {
 }
 
 function addRule() {
+  const rules = ensureRules()
   editingRuleIndex.value = -1
   editingRule.value = {
     name: '',
     description: '',
-    priority: chain.value.rules.length,
+    priority: rules.length,
     enabled: true,
     protocol: AclProtocol.Any,
     ports: [],
@@ -78,29 +84,36 @@ function addRule() {
 }
 
 function editRule(index: number) {
+  const rules = ensureRules()
+  const rule = rules[index]
+  if (!rule) {
+    return
+  }
   editingRuleIndex.value = index
-  editingRule.value = JSON.parse(JSON.stringify(chain.value.rules[index]))
+  editingRule.value = JSON.parse(JSON.stringify(ensureAclRuleLists(rule)))
   showRuleDialog.value = true
 }
 
 function deleteRule(index: number) {
-  chain.value.rules.splice(index, 1)
+  ensureRules().splice(index, 1)
 }
 
 function saveRule(rule: AclRule) {
+  const rules = ensureRules()
+  ensureAclRuleLists(rule)
   if (editingRuleIndex.value === -1) {
-    chain.value.rules.push(rule)
+    rules.push(rule)
   } else {
-    chain.value.rules[editingRuleIndex.value] = rule
+    rules[editingRuleIndex.value] = rule
   }
-  chain.value.rules.sort((a, b) => (b.priority || 0) - (a.priority || 0))
+  rules.sort((a, b) => (b.priority || 0) - (a.priority || 0))
 }
 
 function onRowReorder(event: any) {
-  chain.value.rules = event.value
+  chain.value.rules = event.value ?? []
   // Update priorities based on new order (higher priority at top)
-  chain.value.rules.forEach((rule, index) => {
-    rule.priority = chain.value.rules.length - index - 1
+  ensureRules().forEach((rule, index, rules) => {
+    rule.priority = rules.length - index - 1
   })
 }
 </script>
@@ -169,9 +182,11 @@ function onRowReorder(event: any) {
                     class="font-mono text-xs bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 rounded">{{ ip }}</span>
                   <span v-for="grp in data.source_groups" :key="grp"
                     class="text-xs font-bold text-purple-600 dark:text-purple-400">@{{ grp }}</span>
-                  <span v-if="data.source_ports.length" class="text-xs text-blue-600 dark:text-blue-400 font-mono">:{{
-                    data.source_ports.join(',') }}</span>
-                  <span v-if="!data.source_ips.length && !data.source_groups.length" class="text-gray-400">*</span>
+                  <span v-if="data.source_ports.length"
+                    class="text-xs text-blue-600 dark:text-blue-400 font-mono">:{{
+                      data.source_ports.join(',') }}</span>
+                  <span v-if="!data.source_ips.length && !data.source_groups.length"
+                    class="text-gray-400">*</span>
                 </div>
               </div>
 
@@ -185,8 +200,9 @@ function onRowReorder(event: any) {
                     class="font-mono text-xs bg-surface-100 dark:bg-surface-800 px-1.5 py-0.5 rounded">{{ ip }}</span>
                   <span v-for="grp in data.destination_groups" :key="grp"
                     class="text-xs font-bold text-purple-600 dark:text-purple-400">@{{ grp }}</span>
-                  <span v-if="data.ports.length" class="text-xs text-blue-600 dark:text-blue-400 font-mono">:{{
-                    data.ports.join(',') }}</span>
+                  <span v-if="data.ports.length"
+                    class="text-xs text-blue-600 dark:text-blue-400 font-mono">:{{
+                      data.ports.join(',') }}</span>
                   <span v-if="!data.destination_ips.length && !data.destination_groups.length"
                     class="text-gray-400">*</span>
                 </div>

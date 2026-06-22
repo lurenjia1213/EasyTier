@@ -1,24 +1,25 @@
 import { IPv4, IPv6 } from 'ip-num/IPNumber'
 import { Ipv4Addr, Ipv4Inet, Ipv6Addr } from '../types/network'
 
-export function ipv4ToString(ip: Ipv4Addr) {
-    return IPv4.fromNumber(ip.addr).toString()
+
+export function ipv4ToString(ip: Ipv4Addr): string {
+    return IPv4.fromNumber(ip.addr!).toString()
 }
 
-export function ipv4InetToString(ip: Ipv4Inet | undefined) {
+export function ipv4InetToString(ip: Ipv4Inet | undefined): string {
     if (ip?.address === undefined) {
         return 'undefined'
     }
     return `${ipv4ToString(ip.address)}/${ip.network_length}`
 }
 
-export function ipv6ToString(ip: Ipv6Addr) {
+export function ipv6ToString(ip: Ipv6Addr): string {
     return IPv6.fromBigInt(
-        (BigInt(ip.part1) << BigInt(96))
-        + (BigInt(ip.part2) << BigInt(64))
-        + (BigInt(ip.part3) << BigInt(32))
-        + BigInt(ip.part4),
-    )
+        (BigInt(ip.part1!) << 96n)
+        + (BigInt(ip.part2!) << 64n)
+        + (BigInt(ip.part3!) << 32n)
+        + BigInt(ip.part4!),
+    ).toString()
 }
 
 function toHexString(uint64: bigint, padding = 9): string {
@@ -71,11 +72,13 @@ export interface DeviceInfo {
 }
 
 export function buildDeviceInfo(device: any): DeviceInfo {
-    let dev_info: DeviceInfo = {
+    const runningInstances = device.info?.running_network_instances ?? [];
+
+    const dev_info: DeviceInfo = {
         hostname: device.info?.hostname,
         public_ip: device.client_url,
-        running_network_instances: device.info?.running_network_instances.map((instance: any) => UuidToStr(instance)),
-        running_network_count: device.info?.running_network_instances.length,
+        running_network_instances: runningInstances,
+        running_network_count: runningInstances.length,
         report_time: device.info?.report_time,
         easytier_version: device.info?.easytier_version,
         machine_id: UuidToStr(device.info?.machine_id),
@@ -85,11 +88,11 @@ export function buildDeviceInfo(device: any): DeviceInfo {
     return dev_info;
 }
 
-// write a class to run a function periodically and can be stopped by calling stop(), use setTimeout to trigger the function
 export class PeriodicTask {
     private interval: number;
-    private task: (() => Promise<void>) | undefined;
-    private timer: any;
+    private task: () => Promise<void>;
+    private timer: ReturnType<typeof setTimeout> | undefined;
+    private running = false;
 
     constructor(task: () => Promise<void>, interval: number) {
         this.interval = interval;
@@ -98,19 +101,31 @@ export class PeriodicTask {
 
     _runTaskHelper(nextInterval: number) {
         this.timer = setTimeout(async () => {
-            if (this.task) {
+            if (!this.running) {
+                return;
+            }
+            try {
                 await this.task();
+            } finally {
+                if (!this.running) {
+                    return;
+                }
                 this._runTaskHelper(this.interval);
             }
         }, nextInterval);
     }
 
     start() {
+        if (this.running) {
+            return;
+        }
+        this.running = true;
         this._runTaskHelper(0);
     }
 
     stop() {
-        this.task = undefined;
+        this.running = false;
         clearTimeout(this.timer);
+        this.timer = undefined;
     }
 }

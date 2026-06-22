@@ -9,7 +9,10 @@ const props = defineProps<{
 }>()
 
 const group = defineModel<GroupInfo>({ required: true })
-const emit = defineEmits(['rename-group'])
+const emit = defineEmits<{
+  'rename-group': [{ oldName: string, newName: string }]
+  'delete-group': [string]
+}>()
 
 const { t } = useI18n()
 
@@ -17,6 +20,13 @@ const editingGroup = ref<GroupIdentity | null>(null)
 const editingGroupIndex = ref(-1)
 const showGroupDialog = ref(false)
 const oldGroupName = ref('')
+const groupNameInvalid = ref(false)
+
+function ensureGroupLists(): Required<GroupInfo> {
+  group.value.declares ??= []
+  group.value.members ??= []
+  return group.value as Required<GroupInfo>
+}
 
 function addGroup() {
   editingGroupIndex.value = -1
@@ -25,34 +35,53 @@ function addGroup() {
     group_secret: '',
   }
   oldGroupName.value = ''
+  groupNameInvalid.value = false
   showGroupDialog.value = true
 }
 
 function editGroup(index: number) {
+  const groupInfo = ensureGroupLists()
   editingGroupIndex.value = index
-  editingGroup.value = JSON.parse(JSON.stringify(group.value.declares[index]))
+  editingGroup.value = JSON.parse(JSON.stringify(groupInfo.declares[index]))
   oldGroupName.value = editingGroup.value?.group_name || ''
+  groupNameInvalid.value = false
   showGroupDialog.value = true
 }
 
 function deleteGroup(index: number) {
-  group.value.declares.splice(index, 1)
+  const groupInfo = ensureGroupLists()
+  const deletedName = groupInfo.declares[index]?.group_name
+  groupInfo.declares.splice(index, 1)
+  if (deletedName) {
+    groupInfo.members = groupInfo.members.filter(member => member !== deletedName)
+    emit('delete-group', deletedName)
+  }
 }
 
 function saveGroup() {
   if (!editingGroup.value) return
-  const newName = editingGroup.value.group_name
+  const groupInfo = ensureGroupLists()
+  const newName = editingGroup.value.group_name?.trim() ?? ''
+  if (!newName) {
+    groupNameInvalid.value = true
+    return
+  }
+  if (groupInfo.declares.some((g, index) => index !== editingGroupIndex.value && g.group_name?.trim() === newName)) {
+    groupNameInvalid.value = true
+    return
+  }
+  editingGroup.value.group_name = newName
 
   if (editingGroupIndex.value === -1) {
-    group.value.declares.push(editingGroup.value)
+    groupInfo.declares.push(editingGroup.value)
   } else {
     if (oldGroupName.value && oldGroupName.value !== newName) {
       // Sync in members
-      group.value.members = group.value.members.map(m => m === oldGroupName.value ? newName : m)
+      groupInfo.members = groupInfo.members.map(m => m === oldGroupName.value ? newName : m)
       // Notify parent to sync in rules
       emit('rename-group', { oldName: oldGroupName.value, newName })
     }
-    group.value.declares[editingGroupIndex.value] = editingGroup.value
+    groupInfo.declares[editingGroupIndex.value] = editingGroup.value
   }
   showGroupDialog.value = false
 }
@@ -99,7 +128,8 @@ function saveGroup() {
       <div v-if="editingGroup" class="flex flex-col gap-4 pt-2">
         <div class="flex flex-col gap-2">
           <label class="font-bold">{{ t('acl.group.name') }}</label>
-          <InputText v-model="editingGroup.group_name" fluid />
+          <InputText v-model="editingGroup.group_name" fluid :invalid="groupNameInvalid"
+            @update:model-value="groupNameInvalid = false" />
         </div>
         <div class="flex flex-col gap-2">
           <label class="font-bold">{{ t('acl.group.secret') }}</label>
